@@ -1,0 +1,16 @@
+# зависимости и сборка
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# переменные окружения: секреты не коммитим, шаблон — .env.example
+.env
+.env.*
+!.env.example
+
+# логи и IDE
+*.log
+.idea/
+.vscode/
+.DS_Store
