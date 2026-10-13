@@ -41,7 +41,15 @@ export function setupSwagger(app: INestApplication) {
           'отправлять её во все следующие запросы.',
       )
       .setVersion('0.1.0')
-      .addCookieAuth('access_token')
+      // Схема безопасности с именем 'access_token' — на неё ссылаются @ApiCookieAuth('access_token')
+      .addCookieAuth(
+        'access_token',
+        {
+          type: 'apiKey',
+          description: 'JWT в httpOnly cookie, ставится POST /auth/login',
+        },
+        'access_token',
+      )
       .build(),
   );
   SwaggerModule.setup('docs', app, document, {

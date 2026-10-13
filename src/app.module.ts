@@ -7,6 +7,7 @@ import { BookingsModule } from './bookings/bookings.module';
 import { BoxesModule } from './boxes/boxes.module';
 import { validateEnv } from './common/env.validation';
 import { HealthModule } from './health/health.module';
+import { PaymentsModule } from './payments/payments.module';
 import { UsersModule } from './users/users.module';
 import { VenuesModule } from './venues/venues.module';
 
@@ -36,6 +37,7 @@ import { VenuesModule } from './venues/venues.module';
     VenuesModule,
     BoxesModule,
     BookingsModule,
+    PaymentsModule,
     HealthModule,
   ],
 })
