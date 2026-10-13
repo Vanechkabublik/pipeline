@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from './auth/auth.module';
+import { BookingsModule } from './bookings/bookings.module';
 import { BoxesModule } from './boxes/boxes.module';
 import { validateEnv } from './common/env.validation';
 import { HealthModule } from './health/health.module';
@@ -34,6 +35,7 @@ import { VenuesModule } from './venues/venues.module';
     AuthModule,
     VenuesModule,
     BoxesModule,
+    BookingsModule,
     HealthModule,
   ],
 })
