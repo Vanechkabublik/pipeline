@@ -1,26 +1,36 @@
 import { config } from 'dotenv';
-import { DataSource } from 'typeorm';
-import { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
+import { DataSource, DataSourceOptions } from 'typeorm';
+import { Booking } from './bookings/booking.entity';
+import { IdempotencyKey } from './bookings/idempotency-key.entity';
+import { Box } from './boxes/box.entity';
+import { Payment } from './payments/payment.entity';
+import { WebhookEvent } from './payments/webhook-event.entity';
+import { User } from './users/user.entity';
+import { VenueMember } from './venues/venue-member.entity';
+import { Venue } from './venues/venue.entity';
 
-/**
- * Подключение для TypeORM CLI (миграции) и seed-скрипта.
- * Само приложение настраивает БД в AppModule через ConfigService,
- * а CLI запускается вне Nest, поэтому читает .env сам.
- * В Docker файла .env внутри образа нет — переменные приходят из окружения контейнера.
- */
-config({ quiet: true });
+config({ quiet: true }); // читаем .env
 
-export const dataSourceOptions: PostgresConnectionOptions = {
+// Одни и те же настройки БД для приложения (app.module.ts) и для команд миграций
+export const dataSourceOptions: DataSourceOptions = {
   type: 'postgres',
   host: process.env.DB_HOST,
-  port: Number(process.env.DB_PORT ?? 5432),
+  port: Number(process.env.DB_PORT),
   username: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   database: process.env.DB_NAME,
-  // Пути работают и для src/*.ts (ts-node), и для собранного dist/*.js
-  entities: [__dirname + '/**/*.entity{.ts,.js}'],
+  entities: [
+    User,
+    Venue,
+    VenueMember,
+    Box,
+    Booking,
+    IdempotencyKey,
+    Payment,
+    WebhookEvent,
+  ],
   migrations: [__dirname + '/migrations/*{.ts,.js}'],
-  synchronize: false,
+  synchronize: false, // схема меняется только миграциями
 };
 
 export default new DataSource(dataSourceOptions);

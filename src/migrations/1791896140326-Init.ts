@@ -1,7 +1,4 @@
-// Сгенерировано командой `npm run migration:generate -- src/migrations/Init`
-// по сущностям (*.entity.ts). Руками SQL не правим: меняем сущность и генерируем новую миграцию.
-// uuid_generate_v4() — функция расширения uuid-ossp; TypeORM сам выполняет
-// CREATE EXTENSION IF NOT EXISTS "uuid-ossp" при подключении, если в сущностях есть uuid-ключи.
+// Сгенерировано командой: npm run migration:generate -- src/migrations/Init
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
 export class Init1791896140326 implements MigrationInterface {

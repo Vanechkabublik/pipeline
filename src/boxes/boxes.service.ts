@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -6,123 +7,104 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ErrorCode } from '../common/error-codes';
-import { validationException } from '../common/validation';
-import { VenueStatus } from '../venues/venue.entity';
-import { VenuesService } from '../venues/venues.service';
+import { VenueMember, VenueRole } from '../venues/venue-member.entity';
+import { Venue, VenueStatus } from '../venues/venue.entity';
 import { Box, BoxStatus } from './box.entity';
-import { validateBoxRules } from './box-rules';
-import { CreateBoxDto } from './dto/create-box.dto';
-import { SearchBoxesResponseDto } from './dto/search-boxes-response.dto';
-import { SearchBoxesQueryDto } from './dto/search-boxes.query.dto';
-
-/**
- * Расстояние в метрах от точки (:lat, :lng) до заведения по формуле гаверсинуса.
- * 6371000 — средний радиус Земли в метрах. venue.lat / venue.lng TypeORM
- * сам превратит в "venue"."lat" / "venue"."lng".
- */
-const DISTANCE_SQL = `(2 * 6371000 * asin(sqrt(
-  power(sin(radians(venue.lat - :lat) / 2), 2) +
-  cos(radians(:lat)) * cos(radians(venue.lat)) *
-  power(sin(radians(venue.lng - :lng) / 2), 2)
-)))`;
+import { CreateBoxDto, SearchBoxesDto } from './boxes.dto';
 
 @Injectable()
 export class BoxesService {
   constructor(
-    @InjectRepository(Box)
-    private readonly boxesRepository: Repository<Box>,
-    private readonly venuesService: VenuesService,
+    @InjectRepository(Box) private boxes: Repository<Box>,
+    @InjectRepository(Venue) private venues: Repository<Venue>,
+    @InjectRepository(VenueMember) private members: Repository<VenueMember>,
   ) {}
 
-  async create(userId: string, dto: CreateBoxDto): Promise<Box> {
-    const venue = await this.venuesService.findById(dto.venueId);
-    await this.venuesService.assertOwner(userId, venue.id);
-    if (venue.status !== VenueStatus.ACTIVE) {
-      throw new ForbiddenException({
-        code: ErrorCode.VENUE_NOT_ACTIVE,
-        message: 'Создавать боксы можно только в одобренном заведении',
-      });
+  async create(userId: string, dto: CreateBoxDto) {
+    const isOwner = await this.members.existsBy({
+      userId,
+      venueId: dto.venueId,
+      role: VenueRole.OWNER,
+    });
+    const venue = await this.venues.findOneBy({ id: dto.venueId });
+    if (!isOwner || venue?.status !== VenueStatus.ACTIVE) {
+      throw new ForbiddenException(
+        'Создавать боксы может только владелец одобренного заведения',
+      );
     }
 
-    const errors = validateBoxRules(dto);
-    if (Object.keys(errors).length > 0) {
-      throw validationException(errors);
+    if (dto.price * 2 > dto.originalPrice) {
+      throw new BadRequestException(
+        'Цена со скидкой должна быть не больше 50% от исходной',
+      );
+    }
+    if (dto.pickupStart <= new Date()) {
+      throw new BadRequestException('Начало выдачи должно быть в будущем');
+    }
+    const minutes =
+      (dto.pickupEnd.getTime() - dto.pickupStart.getTime()) / 60000;
+    if (minutes < 30 || minutes > 180) {
+      throw new BadRequestException('Окно выдачи — от 30 минут до 3 часов');
     }
 
-    return this.boxesRepository.save(
-      this.boxesRepository.create({ ...dto, status: BoxStatus.DRAFT }),
-    );
+    return this.boxes.save(this.boxes.create(dto)); // статус DRAFT по умолчанию
   }
 
-  async publish(userId: string, boxId: string): Promise<Box> {
-    const box = await this.findById(boxId);
-    await this.venuesService.assertOwner(userId, box.venueId);
-    if (box.status !== BoxStatus.DRAFT) {
-      throw new ConflictException({
-        code: ErrorCode.BOX_NOT_DRAFT,
-        message: 'Опубликовать можно только черновик',
-      });
-    }
+  async publish(userId: string, id: string) {
+    const box = await this.boxes.findOneBy({ id });
+    if (!box) throw new NotFoundException('Бокс не найден');
+
+    const isOwner = await this.members.existsBy({
+      userId,
+      venueId: box.venueId,
+      role: VenueRole.OWNER,
+    });
+    if (!isOwner)
+      throw new ForbiddenException('Публиковать может только владелец');
+    if (box.status !== BoxStatus.DRAFT)
+      throw new ConflictException('Опубликовать можно только черновик');
+
     box.status = BoxStatus.PUBLISHED;
-    return this.boxesRepository.save(box);
+    return this.boxes.save(box);
   }
 
-  async findById(id: string): Promise<Box> {
-    const box = await this.boxesRepository.findOneBy({ id });
-    if (!box) {
-      throw new NotFoundException({
-        code: ErrorCode.BOX_NOT_FOUND,
-        message: 'Бокс не найден',
-      });
-    }
-    return box;
-  }
+  async search(query: SearchBoxesDto) {
+    // Расстояние в метрах между точкой поиска и заведением (формула гаверсинуса, 6371000 — радиус Земли)
+    const distance = `2 * 6371000 * asin(sqrt(
+      power(sin(radians(venue.lat - :lat) / 2), 2) +
+      cos(radians(:lat)) * cos(radians(venue.lat)) * power(sin(radians(venue.lng - :lng) / 2), 2)
+    ))`;
 
-  /**
-   * Публичный поиск: опубликованные боксы с остатком, у которых выдача ещё не
-   * закончилась, в активных заведениях в радиусе radiusKm. Ближайшие — первыми.
-   */
-  async search(query: SearchBoxesQueryDto): Promise<SearchBoxesResponseDto> {
-    const qb = this.boxesRepository
+    const qb = this.boxes
       .createQueryBuilder('box')
       .innerJoinAndSelect('box.venue', 'venue')
-      .where('box.status = :status', { status: BoxStatus.PUBLISHED })
+      .where("box.status = 'PUBLISHED'")
       .andWhere('box.quantity > 0')
       .andWhere('box.pickupEnd > now()')
-      .andWhere('venue.status = :venueStatus', {
-        venueStatus: VenueStatus.ACTIVE,
-      })
-      .andWhere(`${DISTANCE_SQL} <= :radiusMeters`, {
+      .andWhere("venue.status = 'ACTIVE'")
+      .andWhere(`${distance} <= :radius`, {
         lat: query.lat,
         lng: query.lng,
-        radiusMeters: query.radiusKm * 1000,
+        radius: query.radiusKm * 1000,
       });
 
     if (query.maxPrice !== undefined) {
       qb.andWhere('box.price <= :maxPrice', { maxPrice: query.maxPrice });
     }
 
-    // total — по тем же условиям, но без limit/offset
     const total = await qb.getCount();
-
-    // getRawAndEntities: entities — объекты Box (с venue), raw — «сырые» строки,
-    // где лежит вычисленное поле distance, которого нет в сущности
     const { entities, raw } = await qb
-      .addSelect(DISTANCE_SQL, 'distance')
-      .orderBy('distance', 'ASC')
+      .addSelect(distance, 'distance')
+      .orderBy('distance')
       .limit(query.limit)
       .offset(query.offset)
-      .getRawAndEntities<{ box_id: string; distance: number }>();
+      .getRawAndEntities();
 
-    const distanceByBoxId = new Map(
-      raw.map((row) => [row.box_id, Number(row.distance)]),
-    );
-    const items = entities.map((box) => ({
+    // entities — боксы, raw — «сырые» строки, где лежит посчитанное distance
+    const items = entities.map((box, i) => ({
       ...box,
-      distanceMeters: Math.round(distanceByBoxId.get(box.id) ?? 0),
+      distanceMeters: Math.round(raw[i].distance),
     }));
-
     return { items, total };
   }
 }

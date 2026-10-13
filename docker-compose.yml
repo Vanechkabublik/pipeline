@@ -1,44 +1,32 @@
-# Один файл и для разработки, и для деплоя.
-#   Разработка: docker compose up -d db   →   npm run start:dev
-#   Деплой:     docker compose up -d --build
-# Переменные берутся из файла .env рядом с этим файлом (шаблон — .env.example).
-name: dozakrytiya
-
+# Разработка: docker compose up -d db      (только база, API — через npm run start:dev)
+# Деплой:     docker compose up -d --build (база + API)
 services:
   db:
     image: postgres:16
-    restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
     ports:
-      # Пробрасываем только на localhost: для npm run start:dev и тестов,
-      # но не наружу в сеть.
-      - "127.0.0.1:${DB_PORT:-5432}:5432"
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
       interval: 5s
-      timeout: 5s
       retries: 10
 
   api:
     build: .
-    restart: unless-stopped
     env_file: .env
     environment:
-      # Внутри сети compose база доступна по имени сервиса и стандартному порту.
-      DB_HOST: db
-      DB_PORT: 5432
+      DB_HOST: db # внутри docker база доступна по имени сервиса
     ports:
-      - "${PORT:-3000}:${PORT:-3000}"
+      - "3000:3000"
     depends_on:
       db:
-        # api стартует только когда healthcheck базы стал healthy,
-        # иначе миграции при старте контейнера упадут на «connection refused».
-        condition: service_healthy
+        condition: service_healthy # ждём, пока база реально готова
+    restart: unless-stopped
 
 volumes:
   pgdata:

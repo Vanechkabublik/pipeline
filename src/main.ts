@@ -1,21 +1,25 @@
-import { ConfigService } from '@nestjs/config';
-import { NestFactory } from '@nestjs/core';
+import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
+import { NestFactory, Reflector } from '@nestjs/core';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
-import { configureApp, setupSwagger } from './configure-app';
 
 async function bootstrap() {
-  // rawBody: true — Nest сохраняет сырое тело запроса в req.rawBody.
-  // Оно нужно для проверки HMAC-подписи вебхука: подпись считается
-  // от байтов тела, а не от распарсенного и заново сериализованного JSON.
+  // rawBody: true — сохраняет «сырое» тело запроса, нужно для проверки подписи вебхука
   const app = await NestFactory.create(AppModule, { rawBody: true });
 
-  configureApp(app);
-  setupSwagger(app);
-  // Корректно закрываем соединения с БД и cron-задачи при SIGTERM (docker stop)
-  app.enableShutdownHooks();
+  app.use(cookieParser()); // чтобы читать JWT из cookie
+  app.enableCors({ origin: process.env.CORS_ORIGIN, credentials: true });
+  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+  app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector))); // убирает passwordHash из ответов
 
-  const port = app.get(ConfigService).getOrThrow<number>('PORT');
-  await app.listen(port);
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('ДоЗакрытия API')
+    .build();
+  SwaggerModule.setup('docs', app, () =>
+    SwaggerModule.createDocument(app, swaggerConfig),
+  );
+
+  await app.listen(process.env.PORT ?? 3000);
 }
-
-void bootstrap();
+bootstrap();

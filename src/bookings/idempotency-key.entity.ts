@@ -1,10 +1,6 @@
 import { Column, CreateDateColumn, Entity, PrimaryColumn } from 'typeorm';
 
-/**
- * Сохранённый ответ на POST /bookings по заголовку Idempotency-Key.
- * Если клиент повторит запрос (например, после обрыва сети), он получит
- * тот же ответ, а вторая бронь не создастся.
- */
+// Сохранённый ответ на POST /bookings: повтор с тем же ключом вернёт его же
 @Entity('idempotency_keys')
 export class IdempotencyKey {
   @PrimaryColumn('uuid')
@@ -13,7 +9,6 @@ export class IdempotencyKey {
   @Column('uuid')
   userId: string;
 
-  // sha256 от тела запроса: по нему отличаем «тот же запрос» от «другого запроса с тем же ключом»
   @Column()
   requestHash: string;
 

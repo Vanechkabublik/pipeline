@@ -1,89 +1,37 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
-import {
-  ApiCookieAuth,
-  ApiCreatedResponse,
-  ApiOkResponse,
-  ApiOperation,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
-import { CurrentUser } from '../common/decorators/current-user.decorator';
-import { ErrorResponseDto } from '../common/error-response.dto';
-import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { User } from '../users/user.entity';
-import { AddStaffDto } from './dto/add-staff.dto';
-import { CreateVenueDto } from './dto/create-venue.dto';
-import { VenueDetailsDto } from './dto/venue-details.dto';
-import { VenueMember } from './venue-member.entity';
-import { Venue } from './venue.entity';
+import { AuthGuard } from '@nestjs/passport';
+import { CurrentUser } from '../auth/current-user.decorator';
+import { User, UserRole } from '../users/user.entity';
+import { VenueStatus } from './venue.entity';
+import { AddStaffDto, CreateVenueDto, RejectVenueDto } from './venues.dto';
 import { VenuesService } from './venues.service';
 
-@ApiTags('venues')
-@ApiCookieAuth('access_token')
-@ApiResponse({
-  status: 401,
-  description: 'UNAUTHORIZED',
-  type: ErrorResponseDto,
-})
-@UseGuards(JwtAuthGuard)
-@Controller('venues')
+@Controller()
+@UseGuards(AuthGuard('jwt')) // все маршруты — только для залогиненных
 export class VenuesController {
-  constructor(private readonly venuesService: VenuesService) {}
+  constructor(private venuesService: VenuesService) {}
 
-  @Post()
-  @ApiOperation({
-    summary: 'Создать заведение (статус PENDING, создатель — OWNER)',
-  })
-  @ApiCreatedResponse({ type: Venue })
-  @ApiResponse({
-    status: 400,
-    description: 'VALIDATION_ERROR',
-    type: ErrorResponseDto,
-  })
+  @Post('venues')
   create(@CurrentUser() user: User, @Body() dto: CreateVenueDto) {
     return this.venuesService.create(user.id, dto);
   }
 
-  @Get(':id')
-  @ApiOperation({ summary: 'Заведение вместе с боксами и участниками' })
-  @ApiOkResponse({ type: VenueDetailsDto })
-  @ApiResponse({
-    status: 404,
-    description: 'VENUE_NOT_FOUND',
-    type: ErrorResponseDto,
-  })
+  @Get('venues/:id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.venuesService.findOneWithDetails(id);
+    return this.venuesService.findOne(id);
   }
 
-  @Post(':id/staff')
-  @ApiOperation({
-    summary: 'Добавить сотрудника (STAFF) по email. Только OWNER',
-  })
-  @ApiCreatedResponse({ type: VenueMember })
-  @ApiResponse({
-    status: 403,
-    description: 'NOT_VENUE_OWNER',
-    type: ErrorResponseDto,
-  })
-  @ApiResponse({
-    status: 404,
-    description: 'VENUE_NOT_FOUND, USER_NOT_FOUND',
-    type: ErrorResponseDto,
-  })
-  @ApiResponse({
-    status: 409,
-    description: 'ALREADY_MEMBER',
-    type: ErrorResponseDto,
-  })
+  @Post('venues/:id/staff')
   addStaff(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: User,
@@ -91,4 +39,25 @@ export class VenuesController {
   ) {
     return this.venuesService.addStaff(id, user.id, dto.email);
   }
+
+  @Patch('admin/venues/:id/approve')
+  approve(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: User) {
+    onlyAdmin(user);
+    return this.venuesService.setStatus(id, VenueStatus.ACTIVE);
+  }
+
+  @Patch('admin/venues/:id/reject')
+  reject(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+    @Body() dto: RejectVenueDto,
+  ) {
+    onlyAdmin(user);
+    return this.venuesService.setStatus(id, VenueStatus.REJECTED, dto.reason);
+  }
+}
+
+function onlyAdmin(user: User) {
+  if (user.role !== UserRole.ADMIN)
+    throw new ForbiddenException('Только для админа');
 }

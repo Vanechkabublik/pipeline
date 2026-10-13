@@ -5,35 +5,26 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, EntityManager, Repository } from 'typeorm';
-import { isUniqueViolation } from '../common/db-errors';
-import { ErrorCode } from '../common/error-codes';
-import { UsersService } from '../users/users.service';
-import { CreateVenueDto } from './dto/create-venue.dto';
+import { DataSource, Repository } from 'typeorm';
+import { User } from '../users/user.entity';
 import { VenueMember, VenueRole } from './venue-member.entity';
 import { Venue, VenueStatus } from './venue.entity';
+import { CreateVenueDto } from './venues.dto';
 
 @Injectable()
 export class VenuesService {
   constructor(
-    private readonly dataSource: DataSource,
-    @InjectRepository(Venue)
-    private readonly venuesRepository: Repository<Venue>,
-    @InjectRepository(VenueMember)
-    private readonly membersRepository: Repository<VenueMember>,
-    private readonly usersService: UsersService,
+    private dataSource: DataSource,
+    @InjectRepository(Venue) private venues: Repository<Venue>,
+    @InjectRepository(VenueMember) private members: Repository<VenueMember>,
+    @InjectRepository(User) private users: Repository<User>,
   ) {}
 
-  /**
-   * Создаёт заведение (PENDING) и делает создателя OWNER.
-   * Обе вставки — в одной транзакции: не бывает заведения без владельца,
-   * если вторая вставка упадёт, откатится и первая.
-   */
-  create(userId: string, dto: CreateVenueDto): Promise<Venue> {
+  // Заведение и запись «создатель = OWNER» сохраняются в одной транзакции:
+  // если вторая вставка упадёт, откатится и первая
+  create(userId: string, dto: CreateVenueDto) {
     return this.dataSource.transaction(async (manager) => {
-      const venue = await manager.save(
-        manager.create(Venue, { ...dto, status: VenueStatus.PENDING }),
-      );
+      const venue = await manager.save(manager.create(Venue, dto));
       await manager.save(
         manager.create(VenueMember, {
           userId,
@@ -45,116 +36,46 @@ export class VenuesService {
     });
   }
 
-  /** Заведение вместе с боксами и участниками (у участников — данные пользователя) */
-  async findOneWithDetails(id: string): Promise<Venue> {
-    const venue = await this.venuesRepository.findOne({
+  async findOne(id: string) {
+    const venue = await this.venues.findOne({
       where: { id },
       relations: { boxes: true, members: { user: true } },
-      order: { boxes: { pickupStart: 'ASC' } },
     });
-    if (!venue) {
-      throw this.venueNotFound();
-    }
+    if (!venue) throw new NotFoundException('Заведение не найдено');
     return venue;
   }
 
-  async findById(id: string): Promise<Venue> {
-    const venue = await this.venuesRepository.findOneBy({ id });
-    if (!venue) {
-      throw this.venueNotFound();
-    }
-    return venue;
+  async setStatus(
+    id: string,
+    status: VenueStatus,
+    rejectReason: string | null = null,
+  ) {
+    const venue = await this.venues.findOneBy({ id });
+    if (!venue) throw new NotFoundException('Заведение не найдено');
+    venue.status = status;
+    venue.rejectReason = rejectReason;
+    return this.venues.save(venue);
   }
 
-  async approve(id: string): Promise<Venue> {
-    const venue = await this.findById(id);
-    venue.status = VenueStatus.ACTIVE;
-    venue.rejectReason = null;
-    return this.venuesRepository.save(venue);
-  }
-
-  async reject(id: string, reason: string): Promise<Venue> {
-    const venue = await this.findById(id);
-    venue.status = VenueStatus.REJECTED;
-    venue.rejectReason = reason;
-    return this.venuesRepository.save(venue);
-  }
-
-  /** OWNER добавляет сотрудника по email */
-  async addStaff(
-    venueId: string,
-    ownerId: string,
-    email: string,
-  ): Promise<VenueMember> {
-    await this.findById(venueId);
-    await this.assertOwner(ownerId, venueId);
-
-    const user = await this.usersService.findByEmail(email);
-    if (!user) {
-      throw new NotFoundException({
-        code: ErrorCode.USER_NOT_FOUND,
-        message: 'Пользователь с таким email не найден',
-      });
-    }
-
-    try {
-      return await this.membersRepository.save(
-        this.membersRepository.create({
-          userId: user.id,
-          venueId,
-          role: VenueRole.STAFF,
-        }),
+  async addStaff(venueId: string, ownerId: string, email: string) {
+    const isOwner = await this.members.existsBy({
+      venueId,
+      userId: ownerId,
+      role: VenueRole.OWNER,
+    });
+    if (!isOwner)
+      throw new ForbiddenException(
+        'Добавлять сотрудников может только владелец',
       );
-    } catch (error) {
-      // UNIQUE(userId, venueId): пользователь уже OWNER или STAFF этого заведения
-      if (isUniqueViolation(error)) {
-        throw new ConflictException({
-          code: ErrorCode.ALREADY_MEMBER,
-          message: 'Пользователь уже состоит в этом заведении',
-        });
-      }
-      throw error;
+
+    const user = await this.users.findOneBy({ email: email.toLowerCase() });
+    if (!user) throw new NotFoundException('Пользователь не найден');
+
+    if (await this.members.existsBy({ venueId, userId: user.id })) {
+      throw new ConflictException('Пользователь уже в этом заведении');
     }
-  }
-
-  /**
-   * Роль пользователя в заведении или null, если он не участник.
-   * manager передаётся, когда проверка идёт внутри транзакции.
-   */
-  async getMemberRole(
-    userId: string,
-    venueId: string,
-    manager: EntityManager = this.dataSource.manager,
-  ): Promise<VenueRole | null> {
-    const member = await manager.findOneBy(VenueMember, { userId, venueId });
-    return member?.role ?? null;
-  }
-
-  async assertOwner(userId: string, venueId: string): Promise<void> {
-    const role = await this.getMemberRole(userId, venueId);
-    if (role !== VenueRole.OWNER) {
-      throw new ForbiddenException({
-        code: ErrorCode.NOT_VENUE_OWNER,
-        message: 'Действие доступно только владельцу заведения',
-      });
-    }
-  }
-
-  /** OWNER или STAFF — например, для выдачи заказа */
-  async assertMember(userId: string, venueId: string): Promise<void> {
-    const role = await this.getMemberRole(userId, venueId);
-    if (!role) {
-      throw new ForbiddenException({
-        code: ErrorCode.NOT_VENUE_MEMBER,
-        message: 'Действие доступно только сотрудникам заведения',
-      });
-    }
-  }
-
-  private venueNotFound() {
-    return new NotFoundException({
-      code: ErrorCode.VENUE_NOT_FOUND,
-      message: 'Заведение не найдено',
-    });
+    return this.members.save(
+      this.members.create({ venueId, userId: user.id, role: VenueRole.STAFF }),
+    );
   }
 }
