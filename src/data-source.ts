@@ -1,5 +1,6 @@
 import { config } from 'dotenv';
-import { DataSource, DataSourceOptions } from 'typeorm';
+import { DataSource } from 'typeorm';
+import { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
 
 /**
  * Подключение для TypeORM CLI (миграции) и seed-скрипта.
@@ -9,7 +10,7 @@ import { DataSource, DataSourceOptions } from 'typeorm';
  */
 config({ quiet: true });
 
-export const dataSourceOptions: DataSourceOptions = {
+export const dataSourceOptions: PostgresConnectionOptions = {
   type: 'postgres',
   host: process.env.DB_HOST,
   port: Number(process.env.DB_PORT ?? 5432),

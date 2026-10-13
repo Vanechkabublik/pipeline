@@ -2,8 +2,12 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AuthModule } from './auth/auth.module';
+import { BoxesModule } from './boxes/boxes.module';
 import { validateEnv } from './common/env.validation';
 import { HealthModule } from './health/health.module';
+import { UsersModule } from './users/users.module';
+import { VenuesModule } from './venues/venues.module';
 
 @Module({
   imports: [
@@ -26,6 +30,10 @@ import { HealthModule } from './health/health.module';
       }),
     }),
     ScheduleModule.forRoot(),
+    UsersModule,
+    AuthModule,
+    VenuesModule,
+    BoxesModule,
     HealthModule,
   ],
 })
