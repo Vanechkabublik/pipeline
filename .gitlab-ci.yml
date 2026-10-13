@@ -1,0 +1,100 @@
+# Пайплайн: lint → test → build → deploy
+# lint, test и build выполняются на обычных (shared) раннерах GitLab в Docker-контейнерах.
+# deploy — только для ветки main, на вашем компьютере: раннер с shell executor и тегом local.
+
+stages:
+  - lint
+  - test
+  - build
+  - deploy
+
+# Шаблон для job'ов на Node.js: образ, кэш npm и установка зависимостей
+.node:
+  image: node:24-alpine
+  variables:
+    # Кэш npm внутри каталога проекта — только такие пути GitLab умеет кэшировать
+    npm_config_cache: "$CI_PROJECT_DIR/.npm"
+  cache:
+    key:
+      files:
+        - package-lock.json
+    paths:
+      - .npm/
+  before_script:
+    - npm ci --prefer-offline --no-audit --no-fund
+
+lint:
+  extends: .node
+  stage: lint
+  script:
+    - npm run lint
+
+test:
+  extends: .node
+  stage: test
+  # Рядом с job'ом поднимается PostgreSQL 16, доступный по имени хоста "postgres".
+  # Переменные job'а видит и сервис: POSTGRES_* создают пользователя и тестовую БД.
+  services:
+    - name: postgres:16
+      alias: postgres
+  variables:
+    POSTGRES_USER: dozakrytiya
+    POSTGRES_PASSWORD: dozakrytiya
+    POSTGRES_DB: dozakrytiya_test
+    NODE_ENV: test
+    DB_HOST: postgres
+    DB_PORT: "5432"
+    DB_USER: dozakrytiya
+    DB_PASSWORD: dozakrytiya
+    DB_NAME: dozakrytiya_test
+    DB_NAME_TEST: dozakrytiya_test
+    # Секреты только для тестов в CI — к продовым отношения не имеют
+    JWT_SECRET: ci-only-jwt-secret-at-least-32-characters
+    WEBHOOK_SECRET: ci-only-webhook-secret
+    CORS_ORIGIN: http://localhost:5173
+    BOOKING_HOLD_SECONDS: "600"
+  script:
+    - npm run migration:run
+    - npm run test
+    - npm run test:e2e
+
+build:app:
+  extends: .node
+  stage: build
+  script:
+    - npm run build
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 week
+
+build:image:
+  stage: build
+  # Docker-in-Docker: внутри job'а запускается свой Docker daemon для docker build
+  image: docker:29
+  services:
+    - docker:29-dind
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+  script:
+    - docker build -t "$CI_PROJECT_NAME:$CI_COMMIT_SHORT_SHA" .
+
+deploy:
+  stage: deploy
+  # Job возьмёт только раннер с тегом local — тот, что установлен на вашем компьютере
+  tags:
+    - local
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  # Не тянем артефакты прошлых стадий: образ собирается заново из исходников
+  dependencies: []
+  script:
+    # .env не хранится в репозитории. Он лежит на машине раннера; путь можно
+    # переопределить CI/CD-переменной DEPLOY_ENV_FILE (Settings → CI/CD → Variables).
+    - ENV_FILE="${DEPLOY_ENV_FILE:-/opt/dozakrytiya/.env}"
+    - test -f "$ENV_FILE" || { echo "Не найден файл $ENV_FILE"; exit 1; }
+    - cp "$ENV_FILE" .env
+    # Имя проекта compose зафиксировано в docker-compose.yml (name: dozakrytiya),
+    # поэтому контейнеры и том с данными БД одни и те же при каждом деплое.
+    - docker compose up -d --build
+    - docker compose ps
